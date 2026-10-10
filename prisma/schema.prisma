@@ -1,0 +1,81 @@
+// Wear Birgunj — Authoritative Prisma Schema (PostgreSQL 16)
+// All monetary values are stored in integer minor units (paisa: 1 NPR = 100 paisa) with explicit currency.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id              String    @id @default(uuid())
+  email           String    @unique
+  phone           String?
+  fullName        String    @map("full_name")
+  avatarUrl       String?   @map("avatar_url")
+  passwordHash    String    @map("password_hash")
+  mfaEnabled      Boolean   @default(false) @map("mfa_enabled")
+  mfaSecret       String?   @map("mfa_secret")
+  status          String    @default("ACTIVE") // ACTIVE, SUSPENDED, DELETED
+  emailVerifiedAt DateTime? @map("email_verified_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  @@map("users")
+}
+
+model Vendor {
+  id               String   @id @default(uuid())
+  slug             String   @unique
+  businessName     String   @map("business_name")
+  description      String?
+  logoUrl          String?  @map("logo_url")
+  bannerUrl        String?  @map("banner_url")
+  panVatNumber     String?  @map("pan_vat_number")
+  contactEmail     String   @map("contact_email")
+  contactPhone     String   @map("contact_phone")
+  wardNumber       Int      @default(10) @map("ward_number")
+  addressText      String   @map("address_text")
+  returnPolicy     String   @default("Easy Exchange within 36 hours of delivery in Birgunj.") @map("return_policy")
+  shippingPolicy   String   @default("Fast Delivery within 2-4 hours across Birgunj Wards 1-32.") @map("shipping_policy")
+  approvalStatus   String   @default("PENDING_VERIFICATION") @map("approval_status") // PENDING_VERIFICATION, APPROVED, REJECTED, SUSPENDED
+  rejectionReason  String?  @map("rejection_reason")
+  ratingAvg        Decimal  @default(4.8) @map("rating_avg")
+  ratingCount      Int      @default(0) @map("rating_count")
+  payoutMethod     String   @default("ESEWA") @map("payout_method")
+  payoutAccountRef String?  @map("payout_account_ref")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  @@map("vendors")
+}
+
+model Product {
+  id                  String   @id @default(uuid())
+  vendorId            String   @map("vendor_id")
+  categoryId          String   @map("category_id")
+  brandId             String?  @map("brand_id")
+  slug                String   @unique
+  title               String
+  subtitle            String?
+  description         String
+  specificationsJson  String   @default("{}") @map("specifications_json")
+  moderationStatus    String   @default("PENDING_APPROVAL") @map("moderation_status") // DRAFT, PENDING_APPROVAL, ACTIVE, REJECTED, SUSPENDED
+  rejectionReason     String?  @map("rejection_reason")
+  basePricePaisa      Int      @map("base_price_paisa")
+  compareAtPricePaisa Int?     @map("compare_at_price_paisa")
+  currency            String   @default("NPR")
+  isFeatured          Boolean  @default(false) @map("is_featured")
+  isNew               Boolean  @default(true) @map("is_new")
+  ratingAvg           Decimal  @default(0) @map("rating_avg")
+  reviewCount         Int      @default(0) @map("review_count")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  @@index([vendorId, moderationStatus, updatedAt])
+  @@index([moderationStatus, categoryId, createdAt])
+  @@map("products")
+}
