@@ -42,6 +42,23 @@ const LoginSchema = z
   })
   .strict();
 
+const VendorRegisterSchema = z
+  .object({
+    email: z.string().email().max(180),
+    password: z.string().min(8).max(128),
+    fullName: z.string().min(2).max(120),
+    phone: z.string().min(7).max(25),
+    businessName: z.string().min(3).max(120),
+    slug: z.string().min(3).max(80).regex(/^[a-z0-9-]+$/),
+    wardNumber: z.number().int().min(1).max(32).default(10),
+    addressText: z.string().min(5).max(240),
+    panVatNumber: z.string().min(5).max(40),
+    description: z.string().min(10).max(1000).default('Artisan fashion boutique in Birgunj'),
+    payoutMethod: z.enum(['ESEWA', 'KHALTI', 'BANK_TRANSFER']).default('ESEWA'),
+    payoutAccountRef: z.string().min(4).max(80).default('9800000000'),
+  })
+  .strict();
+
 const ProfileUpdateSchema = z
   .object({
     fullName: z.string().min(2).max(120).optional(),
@@ -180,6 +197,124 @@ export class AuthController {
         roles: ['CUSTOMER'],
         vendorId: null,
       },
+    };
+  }
+
+  @Public()
+  @Post('vendor/register')
+  @HttpCode(HttpStatus.CREATED)
+  async registerVendor(
+    @Body() body: unknown,
+    @Req() req: any,
+    @Res({ passthrough: true }) reply: any,
+  ) {
+    const dto = VendorRegisterSchema.parse(body);
+    const normalizedEmail = dto.email.trim().toLowerCase();
+    this.checkRateLimit(`vreg:${normalizedEmail}`, 5, 60_000);
+
+    const slugCheck = await this.db.query('SELECT id FROM vendors WHERE slug = $1', [dto.slug]);
+    if (slugCheck.rows.length > 0) {
+      throw new AppDomainError('DUPLICATE_VENDOR_SLUG', 'A vendor with this handle already exists.', HttpStatus.CONFLICT);
+    }
+
+    const existingUser = await this.db.query<{ id: string }>('SELECT id FROM users WHERE email = $1', [normalizedEmail]);
+    if (existingUser.rows.length > 0) {
+      throw new AppDomainError('EMAIL_ALREADY_REGISTERED', 'An account with this email address already exists.', HttpStatus.CONFLICT);
+    }
+
+    const userId = `usr-${crypto.randomUUID()}`;
+    const vendorId = `vendor-${crypto.randomUUID()}`;
+    const passwordHash = hashPassword(dto.password);
+    const rawSessionToken = generateOpaqueToken(32);
+    const sessionTokenHash = sha256Hex(rawSessionToken);
+    const csrfToken = generateOpaqueToken(16);
+
+    await this.db.transaction(async (tx) => {
+      await tx.query(
+        `INSERT INTO users (id, email, phone, full_name, password_hash, status, email_verified_at)
+         VALUES ($1, $2, $3, $4, $5, 'ACTIVE', NOW())`,
+        [userId, normalizedEmail, sanitizeText(dto.phone), sanitizeText(dto.fullName), passwordHash],
+      );
+
+      await tx.query(
+        `INSERT INTO vendors (
+          id, slug, business_name, description, pan_vat_number,
+          contact_email, contact_phone, ward_number, address_text,
+          approval_status, payout_method, payout_account_ref
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'PENDING_VERIFICATION', $10, $11)`,
+        [
+          vendorId,
+          dto.slug,
+          sanitizeText(dto.businessName),
+          sanitizeText(dto.description),
+          sanitizeText(dto.panVatNumber),
+          normalizedEmail,
+          sanitizeText(dto.phone),
+          dto.wardNumber,
+          sanitizeText(dto.addressText),
+          dto.payoutMethod,
+          sanitizeText(dto.payoutAccountRef),
+        ],
+      );
+
+      await tx.query(
+        `INSERT INTO vendor_memberships (id, user_id, vendor_id, role, status)
+         VALUES ($1, $2, $3, 'OWNER', 'ACTIVE')`,
+        [`vm-${crypto.randomUUID()}`, userId, vendorId],
+      );
+
+      await tx.query(
+        `INSERT INTO user_role_assignments (id, user_id, role_id)
+         VALUES ($1, $2, 'role-vendor-owner')`,
+        [`ura-${crypto.randomUUID()}`, userId],
+      );
+
+      await tx.query(
+        `INSERT INTO sessions (id, user_id, token_hash, csrf_token, ip_address, expires_at)
+         VALUES ($1, $2, $3, $4, $5, NOW() + INTERVAL '7 days')`,
+        [`sess-${crypto.randomUUID()}`, userId, sessionTokenHash, csrfToken, req.ip ?? null],
+      );
+
+      await this.audit.log(
+        {
+          actorId: userId,
+          actorRole: 'VENDOR_OWNER',
+          vendorId,
+          action: 'VENDOR_ONBOARDING_REGISTERED',
+          targetType: 'VENDOR',
+          targetId: vendorId,
+          reason: 'Self-service vendor registration submitted',
+        },
+        tx,
+      );
+    });
+
+    if (reply?.setCookie) {
+      reply.setCookie('wb_session', rawSessionToken, {
+        httpOnly: true,
+        sameSite: 'lax',
+        path: '/',
+        maxAge: 7 * 24 * 3600,
+      });
+    }
+
+    return {
+      token: rawSessionToken,
+      csrfToken,
+      user: {
+        id: userId,
+        email: normalizedEmail,
+        fullName: sanitizeText(dto.fullName),
+        phone: dto.phone,
+        roles: ['VENDOR_OWNER'],
+        vendorId,
+      },
+      vendor: {
+        id: vendorId,
+        businessName: sanitizeText(dto.businessName),
+        approvalStatus: 'PENDING_VERIFICATION',
+      },
+      message: 'Vendor onboarding application submitted. Your application is under review by Wear Birgunj Admins.',
     };
   }
 

@@ -16,6 +16,14 @@ import {
   Store,
   FileText,
   ArrowLeft,
+  RotateCcw,
+  UploadCloud,
+  Image as ImageIcon,
+  Trash2,
+  X,
+  Clock,
+  AlertTriangle,
+  Check,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { apiFetch, formatNpr, formatShortDate } from '../lib/api';
@@ -26,24 +34,296 @@ import {
 } from '../components/DesignSystem';
 
 // ============================================================================
-// SCREENS #13, #14, #15: VENDOR PORTAL (DASHBOARD, PRODUCTS, ORDERS, FINANCE)
+// SCREEN #13: CLOUDINARY PRODUCT MEDIA MANAGEMENT (MAGIC BYTES + CDN METADATA)
+// ============================================================================
+export const ProductMediaModal: React.FC<{
+  product: any;
+  onClose: () => void;
+  onUpdated: () => void;
+}> = ({ product, onClose, onUpdated }) => {
+  const { showToast } = useAuth();
+  const [images, setImages] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [uploading, setUploading] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+
+  const loadMedia = async () => {
+    setLoading(true);
+    try {
+      const res = await apiFetch(`/products/${product.id}`);
+      setImages(res?.product?.media || []);
+    } catch {
+      // ignore
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadMedia();
+  }, [product.id]);
+
+  const handleFileUpload = async (file: File) => {
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+      showToast('Only JPEG, PNG, and WebP images are supported.', 'error');
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      showToast('Image size exceeds 5MB limit.', 'error');
+      return;
+    }
+
+    setUploading(true);
+    try {
+      const reader = new FileReader();
+      const base64Promise = new Promise<string>((resolve, reject) => {
+        reader.onload = () => {
+          const res = reader.result as string;
+          const b64 = res.includes(',') ? res.split(',')[1] : res;
+          resolve(b64);
+        };
+        reader.onerror = reject;
+      });
+      reader.readAsDataURL(file);
+      const fileBase64 = await base64Promise;
+
+      await apiFetch(`/vendor/products/${product.id}/images/upload`, {
+        method: 'POST',
+        body: {
+          fileBase64,
+          filename: file.name,
+          mimeType: file.type,
+          isPrimary: images.length === 0,
+        },
+      });
+
+      showToast('Image uploaded and verified with magic bytes!', 'success');
+      await loadMedia();
+      onUpdated();
+    } catch (err: any) {
+      showToast(err.message || 'Image upload failed.', 'error');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleDeleteImage = async (imageId: string) => {
+    try {
+      await apiFetch(`/vendor/products/${product.id}/images/${imageId}`, {
+        method: 'DELETE',
+      });
+      showToast('Image deleted.', 'info');
+      await loadMedia();
+      onUpdated();
+    } catch (err: any) {
+      showToast(err.message || 'Could not delete image.', 'error');
+    }
+  };
+
+  const handleSetPrimary = async (imageId: string) => {
+    try {
+      const reordered = [
+        imageId,
+        ...images.filter((i) => i.id !== imageId).map((i) => i.id),
+      ];
+      await apiFetch(`/vendor/products/${product.id}/images/reorder`, {
+        method: 'PATCH',
+        body: {
+          imageIds: reordered,
+        },
+      });
+      showToast('Primary cover image updated.', 'success');
+      await loadMedia();
+      onUpdated();
+    } catch (err: any) {
+      showToast(err.message || 'Could not update primary image.', 'error');
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150 overflow-y-auto">
+      <div className="bg-white rounded-3xl max-w-2xl w-full p-6 sm:p-7 shadow-2xl border border-slate-200 space-y-5 my-8">
+        <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+          <div className="flex items-center gap-2.5">
+            <div className="w-9 h-9 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center">
+              <ImageIcon className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="font-bold text-base text-slate-900">
+                Product Media Management
+              </h3>
+              <p className="text-xs text-slate-500">
+                {product.title} • Cloudinary Media Integration
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-1.5 rounded-xl hover:bg-slate-100 text-slate-400 hover:text-slate-600"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Security & Verification Banner */}
+        <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 flex items-center justify-between text-xs text-slate-600">
+          <div className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+            <span className="font-semibold text-slate-800">
+              Binary Magic Byte Inspection & Cloudinary Isolation
+            </span>
+          </div>
+          <span className="text-[11px] font-mono text-slate-500 bg-white px-2 py-0.5 rounded border border-slate-200">
+            JPEG • PNG • WebP &lt; 5MB
+          </span>
+        </div>
+
+        {/* Drag & Drop Zone */}
+        <div
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDragOver(true);
+          }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDragOver(false);
+            if (e.dataTransfer.files?.[0]) {
+              handleFileUpload(e.dataTransfer.files[0]);
+            }
+          }}
+          className={`border-2 border-dashed rounded-3xl p-6 text-center transition-all ${
+            dragOver
+              ? 'border-rose-500 bg-rose-50/50'
+              : 'border-slate-300 hover:border-slate-400 bg-slate-50/50'
+          }`}
+        >
+          <UploadCloud className="w-10 h-10 text-slate-400 mx-auto mb-2" />
+          <p className="text-xs font-bold text-slate-800">
+            Drag & drop high-resolution product photos here
+          </p>
+          <p className="text-[11px] text-slate-400 mt-0.5">
+            or browse files from your computer (auto-converts to WebP on Cloudinary CDN)
+          </p>
+
+          <label className="inline-block mt-3 px-4 py-2 rounded-xl bg-slate-900 hover:bg-[#E11D48] text-white text-xs font-bold cursor-pointer transition-colors shadow-2xs">
+            {uploading ? 'Validating Magic Bytes & Uploading...' : 'Browse Images'}
+            <input
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              disabled={uploading}
+              className="hidden"
+              onChange={(e) => {
+                if (e.target.files?.[0]) {
+                  handleFileUpload(e.target.files[0]);
+                }
+              }}
+            />
+          </label>
+        </div>
+
+        {/* Uploaded Gallery */}
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+              Product Images ({images.length})
+            </h4>
+            <span className="text-[11px] text-slate-400">
+              First image is the primary storefront cover
+            </span>
+          </div>
+
+          {loading ? (
+            <div className="h-28 bg-slate-100 rounded-2xl animate-pulse" />
+          ) : images.length === 0 ? (
+            <div className="p-6 text-center text-xs text-slate-400 bg-slate-50 rounded-2xl border border-slate-200">
+              No custom media uploaded yet. Default catalog image will be shown.
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+              {images.map((img, idx) => (
+                <div
+                  key={img.id}
+                  className="group relative rounded-2xl overflow-hidden border border-slate-200 bg-slate-100 aspect-square"
+                >
+                  <img
+                    src={img.url}
+                    alt={`Product image ${idx + 1}`}
+                    className="w-full h-full object-cover"
+                  />
+
+                  {img.is_primary && (
+                    <div className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-[#E11D48] text-white text-[10px] font-bold shadow-xs">
+                      Primary Cover
+                    </div>
+                  )}
+
+                  <div className="absolute bottom-2 left-2 right-2 flex items-center justify-between gap-1 opacity-0 group-hover:opacity-100 transition-opacity bg-black/60 p-1.5 rounded-xl backdrop-blur-xs">
+                    {!img.is_primary && (
+                      <button
+                        type="button"
+                        onClick={() => handleSetPrimary(img.id)}
+                        className="px-2 py-1 rounded-lg bg-white/90 hover:bg-white text-[10px] font-bold text-slate-900"
+                      >
+                        Set Primary
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteImage(img.id)}
+                      className="p-1 rounded-lg bg-rose-600/90 hover:bg-rose-600 text-white ml-auto"
+                      title="Delete Image"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="flex justify-end pt-2 border-t border-slate-100">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-5 py-2.5 rounded-xl bg-slate-900 text-white text-xs font-bold"
+          >
+            Done
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ============================================================================
+// SCREENS #12, #13, #14, #15: VENDOR PORTAL (DASHBOARD, PRODUCTS, ORDERS, RETURNS, FINANCE)
 // ============================================================================
 export const VendorPortalPage: React.FC = () => {
   const { user, loginWithCredentials, showToast } = useAuth();
   const [activeTab, setActiveTab] = useState<
-    'dashboard' | 'products' | 'orders' | 'finance'
+    'dashboard' | 'products' | 'orders' | 'returns' | 'finance'
   >('dashboard');
   const [productFilter, setProductFilter] = useState('ALL');
   const [orderFilter, setOrderFilter] = useState('ALL');
+  const [returnFilter, setReturnFilter] = useState('ALL');
 
   const [dashboard, setDashboard] = useState<any>(null);
   const [products, setProducts] = useState<any[]>([]);
   const [orders, setOrders] = useState<any[]>([]);
+  const [vendorReturns, setVendorReturns] = useState<any[]>([]);
   const [finance, setFinance] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
-  // Add Product Modal State (Screen #14)
+  // Modal states
   const [showAddModal, setShowAddModal] = useState(false);
+  const [selectedProductForMedia, setSelectedProductForMedia] = useState<any | null>(null);
+  const [rejectModalReturn, setRejectModalReturn] = useState<any | null>(null);
+  const [rejectionReasonInput, setRejectionReasonInput] = useState('');
+  const [isReviewingReturn, setIsReviewingReturn] = useState(false);
+
   const [newTitle, setNewTitle] = useState('');
   const [newSlug, setNewSlug] = useState('');
   const [newCategory, setNewCategory] = useState('cat-shoes');
@@ -58,16 +338,18 @@ export const VendorPortalPage: React.FC = () => {
       if (!user?.vendorId) {
         await loginWithCredentials('vendor@fashionhub.np', 'VendorPass123!');
       }
-      const [dRes, pRes, oRes, fRes] = await Promise.all([
+      const [dRes, pRes, oRes, fRes, rRes] = await Promise.all([
         apiFetch('/vendor/dashboard'),
         apiFetch('/vendor/products'),
         apiFetch('/vendor/orders'),
         apiFetch('/vendor/finance'),
+        apiFetch('/vendor/returns'),
       ]);
       setDashboard(dRes);
       setProducts(pRes.items || []);
       setOrders(oRes.items || []);
       setFinance(fRes);
+      setVendorReturns(rRes.items || []);
     } catch (err: any) {
       showToast(err.message || 'Could not load vendor portal.', 'error');
     } finally {
@@ -78,6 +360,36 @@ export const VendorPortalPage: React.FC = () => {
   useEffect(() => {
     loadVendorAll();
   }, [user?.vendorId]);
+
+  const handleReviewReturn = async (
+    returnId: string,
+    decision: 'APPROVE' | 'REJECT',
+    rejectionReason?: string,
+  ) => {
+    setIsReviewingReturn(true);
+    try {
+      await apiFetch(`/vendor/returns/${returnId}/review`, {
+        method: 'POST',
+        body: {
+          decision,
+          rejectionReason: decision === 'REJECT' ? rejectionReason : undefined,
+        },
+      });
+      showToast(
+        decision === 'APPROVE'
+          ? 'Return/Exchange approved! Stock reserved & Birgunj courier notified.'
+          : 'Return request rejected.',
+        decision === 'APPROVE' ? 'success' : 'info',
+      );
+      setRejectModalReturn(null);
+      setRejectionReasonInput('');
+      loadVendorAll();
+    } catch (err: any) {
+      showToast(err.message || 'Could not review return.', 'error');
+    } finally {
+      setIsReviewingReturn(false);
+    }
+  };
 
   const handleCreateProduct = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -153,6 +465,10 @@ export const VendorPortalPage: React.FC = () => {
     orderFilter === 'ALL' ? true : o.status === orderFilter,
   );
 
+  const filteredReturns = vendorReturns.filter((r) =>
+    returnFilter === 'ALL' ? true : r.status === returnFilter,
+  );
+
   return (
     <div className="min-h-screen flex flex-col bg-[#F1F5F9]">
       <RoleSwitcherBar />
@@ -168,6 +484,11 @@ export const VendorPortalPage: React.FC = () => {
                 { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
                 { id: 'products', label: 'Products', icon: Package },
                 { id: 'orders', label: 'Orders', icon: ShoppingCart },
+                {
+                  id: 'returns',
+                  label: `Returns & Exchanges (${vendorReturns.filter((r) => r.status === 'REQUESTED').length})`,
+                  icon: RotateCcw,
+                },
                 { id: 'finance', label: 'Earnings & Ledger', icon: Wallet },
               ].map((item) => {
                 const Icon = item.icon;
@@ -210,6 +531,7 @@ export const VendorPortalPage: React.FC = () => {
                 {activeTab === 'dashboard' && 'Dashboard'}
                 {activeTab === 'products' && 'Products'}
                 {activeTab === 'orders' && 'Vendor Orders'}
+                {activeTab === 'returns' && 'Return & Exchange Queue (36-Hr SLA)'}
                 {activeTab === 'finance' && 'Earnings & Commission Ledger'}
               </h1>
               <p className="text-xs text-slate-500">
@@ -481,12 +803,23 @@ export const VendorPortalPage: React.FC = () => {
 
                     <StatusBadge status={p.moderation_status} />
 
-                    <Link
-                      to={`/product/${p.slug}`}
-                      className="px-3.5 py-1.5 rounded-lg border border-slate-200 font-semibold text-slate-700 hover:bg-slate-50"
-                    >
-                      View / Edit
-                    </Link>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedProductForMedia(p)}
+                        className="px-3 py-1.5 rounded-lg border border-rose-200 bg-rose-50 text-rose-700 font-semibold hover:bg-rose-100 flex items-center gap-1.5"
+                      >
+                        <ImageIcon className="w-3.5 h-3.5" />
+                        Media
+                      </button>
+
+                      <Link
+                        to={`/product/${p.slug}`}
+                        className="px-3.5 py-1.5 rounded-lg border border-slate-200 font-semibold text-slate-700 hover:bg-slate-50"
+                      >
+                        View / Edit
+                      </Link>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -591,6 +924,152 @@ export const VendorPortalPage: React.FC = () => {
             </div>
           )}
 
+          {/* TAB: SCREEN #12 VENDOR RETURN & EXCHANGE QUEUE */}
+          {activeTab === 'returns' && (
+            <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-sm space-y-5">
+              <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-100 pb-4">
+                <div>
+                  <h2 className="text-base font-bold text-slate-900">
+                    Return & 36-Hour Exchange Queue
+                  </h2>
+                  <p className="text-xs text-slate-500">
+                    Review customer return and size exchange requests with local Birgunj courier pickup
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2 overflow-x-auto">
+                  {[
+                    { id: 'ALL', label: 'All' },
+                    { id: 'REQUESTED', label: 'Pending Review' },
+                    { id: 'APPROVED', label: 'Approved' },
+                    { id: 'REJECTED', label: 'Rejected' },
+                    { id: 'COMPLETED', label: 'Completed' },
+                  ].map((t) => (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => setReturnFilter(t.id)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${
+                        returnFilter === t.id
+                          ? 'bg-[#111827] text-white border-[#111827]'
+                          : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                      }`}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {filteredReturns.length === 0 ? (
+                <div className="p-12 text-center text-xs text-slate-400 bg-slate-50 rounded-2xl border border-dashed border-slate-200 space-y-2">
+                  <RotateCcw className="w-8 h-8 text-slate-300 mx-auto" />
+                  <p className="font-semibold text-slate-600">No return requests found in this filter.</p>
+                </div>
+              ) : (
+                <div className="divide-y divide-slate-100">
+                  {filteredReturns.map((ret: any) => (
+                    <div key={ret.id} className="py-4 space-y-3.5">
+                      <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={`px-2.5 py-1 rounded-lg font-bold text-[10px] uppercase tracking-wider ${
+                              ret.request_type === 'EXCHANGE'
+                                ? 'bg-blue-100 text-blue-800'
+                                : 'bg-amber-100 text-amber-800'
+                            }`}
+                          >
+                            {ret.request_type === 'EXCHANGE' ? '36-Hr Size Exchange' : 'Return for Refund'}
+                          </span>
+                          <span className="font-mono text-slate-400">Request #{ret.id.slice(0, 12)}</span>
+                          <span className="text-slate-400">• Order #{ret.order_number}</span>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <StatusBadge status={ret.status} />
+                          <span className="text-slate-400">
+                            Requested: {formatShortDate(ret.created_at)}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-center bg-slate-50/80 p-3.5 rounded-xl border border-slate-100">
+                        <div className="md:col-span-6 flex items-center gap-3">
+                          <img
+                            src={
+                              ret.image_url_snapshot ||
+                              'https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=160&auto=format&fit=crop&q=80'
+                            }
+                            alt={ret.product_title_snapshot}
+                            className="w-14 h-14 rounded-xl object-cover bg-white border border-slate-200 shrink-0"
+                          />
+                          <div className="min-w-0 text-xs">
+                            <p className="font-bold text-slate-900 truncate">
+                              {ret.product_title_snapshot}
+                            </p>
+                            <p className="text-slate-500">
+                              Original: {ret.variant_title_snapshot || 'Standard'} • Value:{' '}
+                              <strong className="text-slate-800">{formatNpr(ret.refund_amount_paisa)}</strong>
+                            </p>
+                            {ret.replacement_variant_title && (
+                              <p className="text-blue-700 font-semibold mt-0.5">
+                                Replacement Variant: {ret.replacement_variant_title}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="md:col-span-6 text-xs space-y-1">
+                          <p className="text-slate-700">
+                            <strong>Reason:</strong> {ret.reason}
+                          </p>
+                          {ret.customer_explanation && (
+                            <p className="text-slate-600 italic">
+                              "{ret.customer_explanation}"
+                            </p>
+                          )}
+                          <p className="text-slate-500">
+                            <strong>Customer Pickup:</strong> {ret.pickup_address_text || `Customer Ward Delivery Address`}
+                          </p>
+                        </div>
+                      </div>
+
+                      {ret.status === 'REJECTED' && ret.rejection_reason && (
+                        <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-800">
+                          <strong>Rejection Reason:</strong> {ret.rejection_reason}
+                        </div>
+                      )}
+
+                      {ret.status === 'REQUESTED' && (
+                        <div className="flex items-center justify-end gap-2 pt-1">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setRejectModalReturn(ret);
+                              setRejectionReasonInput('');
+                            }}
+                            className="px-3.5 py-1.5 rounded-lg border border-slate-300 text-slate-700 text-xs font-semibold hover:bg-slate-100"
+                          >
+                            Reject Request
+                          </button>
+                          <button
+                            type="button"
+                            disabled={isReviewingReturn}
+                            onClick={() => handleReviewReturn(ret.id, 'APPROVE')}
+                            className="px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-2xs flex items-center gap-1.5"
+                          >
+                            <Check className="w-3.5 h-3.5" />
+                            Approve {ret.request_type === 'EXCHANGE' ? '& Reserve Replacement Stock' : '& Authorize Pickup'}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* TAB 4: VENDOR IMMUTABLE FINANCIAL LEDGER */}
           {activeTab === 'finance' && (
             <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-sm space-y-5">
@@ -642,6 +1121,81 @@ export const VendorPortalPage: React.FC = () => {
           )}
         </div>
       </div>
+
+      {/* Cloudinary Media Management Modal */}
+      {selectedProductForMedia && (
+        <ProductMediaModal
+          product={selectedProductForMedia}
+          onClose={() => setSelectedProductForMedia(null)}
+          onUpdated={() => loadVendorAll()}
+        />
+      )}
+
+      {/* Reject Return Modal */}
+      {rejectModalReturn && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h3 className="font-bold text-sm text-slate-900">
+                Reject Return Request
+              </h3>
+              <button
+                type="button"
+                onClick={() => setRejectModalReturn(null)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-600">
+              Please state the specific reason for rejecting the return or exchange request for item{' '}
+              <strong>{rejectModalReturn.product_title_snapshot}</strong>. This explanation will be displayed directly to the customer.
+            </p>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                Rejection Reason * (min 5 chars)
+              </label>
+              <textarea
+                required
+                rows={3}
+                value={rejectionReasonInput}
+                onChange={(e) => setRejectionReasonInput(e.target.value)}
+                placeholder="e.g. Tags were removed, product visibly worn, or returned after 36-hr SLA window expired..."
+                className="w-full text-xs rounded-xl border border-slate-300 p-3 bg-slate-50 focus:bg-white resize-none"
+              />
+              <p className="text-[11px] text-slate-400 text-right mt-1">
+                {rejectionReasonInput.length}/500 chars
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setRejectModalReturn(null)}
+                className="px-4 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isReviewingReturn || rejectionReasonInput.trim().length < 5}
+                onClick={() =>
+                  handleReviewReturn(
+                    rejectModalReturn.id,
+                    'REJECT',
+                    rejectionReasonInput.trim(),
+                  )
+                }
+                className="px-5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold disabled:opacity-40 transition-colors"
+              >
+                {isReviewingReturn ? 'Submitting...' : 'Confirm Rejection'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

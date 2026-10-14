@@ -17,6 +17,13 @@ import {
   Truck,
   ShieldCheck,
   RefreshCw,
+  ArrowLeftRight,
+  RotateCcw,
+  AlertCircle,
+  X,
+  Check,
+  Info,
+  FileText,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { apiFetch, formatNpr, formatShortDate, formatTimeOnly } from '../lib/api';
@@ -659,14 +666,35 @@ export const AccountProfilePage: React.FC = () => {
   const { user, addresses, notifications, refreshSession, logout, showToast } =
     useAuth();
   const navigate = useNavigate();
-  const [activeSection, setActiveSection] = useState<'profile' | 'addresses' | 'notifications'>(
-    'profile',
-  );
+  const [activeSection, setActiveSection] = useState<
+    'profile' | 'addresses' | 'returns' | 'notifications'
+  >('profile');
   const [fullName, setFullName] = useState(user?.fullName || '');
   const [phone, setPhone] = useState(user?.phone || '');
   const [newWard, setNewWard] = useState(10);
   const [newStreet, setNewStreet] = useState('');
   const [newLandmark, setNewLandmark] = useState('');
+
+  const [returnsList, setReturnsList] = useState<any[]>([]);
+  const [loadingReturns, setLoadingReturns] = useState(false);
+
+  const loadCustomerReturns = async () => {
+    setLoadingReturns(true);
+    try {
+      const res = await apiFetch('/customer/returns');
+      setReturnsList(res.items || []);
+    } catch {
+      // ignore
+    } finally {
+      setLoadingReturns(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeSection === 'returns') {
+      loadCustomerReturns();
+    }
+  }, [activeSection]);
 
   useEffect(() => {
     if (user) {
@@ -752,6 +780,20 @@ export const AccountProfilePage: React.FC = () => {
             >
               <Package className="w-4 h-4" /> My Orders
             </Link>
+            <button
+              type="button"
+              onClick={() => {
+                setActiveSection('returns');
+                loadCustomerReturns();
+              }}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-semibold ${
+                activeSection === 'returns'
+                  ? 'bg-slate-100 text-slate-900 font-bold'
+                  : 'text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              <ArrowLeftRight className="w-4 h-4 text-rose-500" /> Returns & Exchanges ({returnsList.length})
+            </button>
             <Link
               to="/wishlist"
               className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-50"
@@ -910,6 +952,145 @@ export const AccountProfilePage: React.FC = () => {
               </div>
             )}
 
+            {activeSection === 'returns' && (
+              <div className="space-y-6">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+                  <div>
+                    <h2 className="text-lg font-bold text-slate-900">
+                      Returns & 36-Hour Easy Exchanges
+                    </h2>
+                    <p className="text-xs text-slate-500">
+                      Track your return and exchange status with local Birgunj courier pickup
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={loadCustomerReturns}
+                    className="p-2 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs flex items-center gap-1.5"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${loadingReturns ? 'animate-spin' : ''}`} />
+                    Refresh
+                  </button>
+                </div>
+
+                {loadingReturns ? (
+                  <div className="h-40 bg-slate-100 rounded-2xl animate-pulse" />
+                ) : returnsList.length === 0 ? (
+                  <div className="p-12 text-center bg-slate-50 rounded-2xl border border-dashed border-slate-200 space-y-3">
+                    <ArrowLeftRight className="w-8 h-8 text-slate-300 mx-auto" />
+                    <p className="text-sm font-semibold text-slate-700">No active return or exchange requests</p>
+                    <p className="text-xs text-slate-400">
+                      You can request a size exchange or return within 36 hours of delivery from your Orders page.
+                    </p>
+                    <Link
+                      to="/orders"
+                      className="inline-block px-4 py-2 bg-slate-900 text-white text-xs font-semibold rounded-xl"
+                    >
+                      View Delivered Orders
+                    </Link>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {returnsList.map((ret) => (
+                      <div
+                        key={ret.id}
+                        className="p-5 rounded-2xl border border-slate-200 bg-white shadow-2xs space-y-4"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-3">
+                          <div className="flex items-center gap-2">
+                            <span
+                              className={`px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider ${
+                                ret.request_type === 'EXCHANGE'
+                                  ? 'bg-blue-100 text-blue-800'
+                                  : 'bg-amber-100 text-amber-800'
+                              }`}
+                            >
+                              {ret.request_type === 'EXCHANGE' ? '36-Hr Size Exchange' : 'Return for Refund'}
+                            </span>
+                            <span className="text-xs font-mono text-slate-400">#{ret.id}</span>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <StatusBadge status={ret.status} />
+                            <span className="text-xs text-slate-400">
+                              {formatShortDate(ret.created_at)}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-4">
+                          <img
+                            src={
+                              ret.image_url_snapshot ||
+                              'https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=160&auto=format&fit=crop&q=80'
+                            }
+                            alt={ret.product_title_snapshot}
+                            className="w-16 h-16 rounded-xl object-cover bg-slate-100 border border-slate-100 shrink-0"
+                          />
+                          <div className="flex-1 min-w-0">
+                            <h4 className="font-bold text-sm text-slate-900 truncate">
+                              {ret.product_title_snapshot}
+                            </h4>
+                            <p className="text-xs text-slate-500">
+                              Original: {ret.variant_title_snapshot || 'Standard'} • Vendor: {ret.vendor_name || 'Fashion Hub'}
+                            </p>
+                            {ret.replacement_variant_title && (
+                              <p className="text-xs font-semibold text-blue-600 mt-0.5">
+                                Replacement Variant: {ret.replacement_variant_title}
+                              </p>
+                            )}
+                            <p className="text-xs font-extrabold text-slate-800 mt-1">
+                              {formatNpr(ret.refund_amount_paisa)}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="bg-slate-50 rounded-xl p-3 text-xs space-y-1.5 border border-slate-100">
+                          <div className="flex items-start gap-2">
+                            <span className="font-semibold text-slate-500 shrink-0">Reason:</span>
+                            <span className="text-slate-800">{ret.reason}</span>
+                          </div>
+                          {ret.customer_explanation && (
+                            <div className="flex items-start gap-2">
+                              <span className="font-semibold text-slate-500 shrink-0">Explanation:</span>
+                              <span className="text-slate-700 italic">"{ret.customer_explanation}"</span>
+                            </div>
+                          )}
+                          {ret.pickup_address_text && (
+                            <div className="flex items-start gap-2">
+                              <span className="font-semibold text-slate-500 shrink-0">Pickup:</span>
+                              <span className="text-slate-700">📍 {ret.pickup_address_text}</span>
+                            </div>
+                          )}
+                        </div>
+
+                        {ret.status === 'REJECTED' && ret.rejection_reason && (
+                          <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-800 flex items-start gap-2">
+                            <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                            <div>
+                              <p className="font-bold">Vendor Rejection Reason:</p>
+                              <p className="mt-0.5">{ret.rejection_reason}</p>
+                            </div>
+                          </div>
+                        )}
+
+                        {ret.status === 'APPROVED' && (
+                          <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-800 flex items-start gap-2">
+                            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                            <div>
+                              <p className="font-bold">Request Approved by Vendor</p>
+                              <p className="mt-0.5">
+                                Rajesh Kumar (Birgunj Express) has been assigned to collect your package from your Birgunj doorstep.
+                              </p>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
             {activeSection === 'notifications' && (
               <div className="space-y-4">
                 <h2 className="text-lg font-bold text-slate-900">Notifications</h2>
@@ -934,6 +1115,337 @@ export const AccountProfilePage: React.FC = () => {
 };
 
 // ============================================================================
+// SCREEN #10: RETURN & EXCHANGE MODAL (36-HR SLA + RESOLUTION + LIVE VARIANTS)
+// ============================================================================
+export const ReturnExchangeModal: React.FC<{
+  order: any;
+  item: any;
+  onClose: () => void;
+  onSuccess: () => void;
+}> = ({ order, item, onClose, onSuccess }) => {
+  const { showToast } = useAuth();
+  const [requestType, setRequestType] = useState<'EXCHANGE' | 'RETURN'>('EXCHANGE');
+  const [reason, setReason] = useState('Incorrect size / doesn\'t fit properly');
+  const [explanation, setExplanation] = useState('');
+  const [pickupAddress, setPickupAddress] = useState(
+    order?.shipping_address
+      ? `${order.shipping_address}, Ward ${order.shipping_ward || 10}, Birgunj`
+      : 'Ward 10, Adarshnagar, Birgunj',
+  );
+  const [replacementVariantId, setReplacementVariantId] = useState<string>('');
+  const [availableVariants, setAvailableVariants] = useState<any[]>([]);
+  const [loadingVariants, setLoadingVariants] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (item?.product_id) {
+      setLoadingVariants(true);
+      apiFetch(`/products/${item.product_id}`)
+        .then((res) => {
+          if (res?.product?.variants && res.product.variants.length > 0) {
+            setAvailableVariants(res.product.variants);
+            const otherVar = res.product.variants.find((v: any) => v.id !== item.variant_id);
+            if (otherVar) {
+              setReplacementVariantId(otherVar.id);
+            } else if (res.product.variants[0]) {
+              setReplacementVariantId(res.product.variants[0].id);
+            }
+          }
+        })
+        .catch(() => {
+          // fallback if product lookup by id is not direct
+        })
+        .finally(() => setLoadingVariants(false));
+    }
+  }, [item?.product_id, item?.variant_id]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (explanation.trim().length < 10) {
+      showToast('Explanation must be at least 10 characters long.', 'error');
+      return;
+    }
+
+    if (requestType === 'EXCHANGE' && !replacementVariantId) {
+      showToast('Please select a replacement size/variant for your exchange.', 'error');
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      await apiFetch('/customer/returns', {
+        method: 'POST',
+        body: {
+          orderItemId: item.id,
+          requestType,
+          reason,
+          explanation: explanation.trim(),
+          replacementVariantId: requestType === 'EXCHANGE' ? replacementVariantId : undefined,
+          pickupAddressText: pickupAddress.trim(),
+        },
+      });
+
+      showToast(
+        requestType === 'EXCHANGE'
+          ? '36-Hour Size Exchange requested! Our vendor will review and dispatch replacement.'
+          : 'Return for refund requested! Birgunj local courier assigned upon approval.',
+        'success',
+      );
+      onSuccess();
+      onClose();
+    } catch (err: any) {
+      showToast(err.message || 'Could not submit return/exchange request.', 'error');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150 overflow-y-auto">
+      <div className="bg-white rounded-3xl max-w-xl w-full p-6 sm:p-7 shadow-2xl border border-slate-200 space-y-5 my-8">
+        <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+          <div className="flex items-center gap-2.5">
+            <div className="w-9 h-9 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center">
+              <RotateCcw className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="font-bold text-base text-slate-900">
+                36-Hour Easy Return & Exchange
+              </h3>
+              <p className="text-xs text-slate-500">
+                Order {order?.order_number} • Birgunj Hyperlocal SLA
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-1.5 rounded-xl hover:bg-slate-100 text-slate-400 hover:text-slate-600"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* 36-Hr SLA Banner */}
+        <div className="p-3.5 rounded-2xl bg-gradient-to-r from-rose-50 to-amber-50 border border-rose-100 flex items-start gap-3">
+          <Clock className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+          <div className="text-xs text-slate-700">
+            <p className="font-bold text-rose-950">Birgunj 36-Hour SLA Guarantee Active</p>
+            <p className="mt-0.5 text-slate-600 leading-relaxed">
+              Items delivered within the last 36 hours qualify for free doorstep exchange or returns. Rajesh Kumar and local couriers will pick up from your Birgunj address.
+            </p>
+          </div>
+        </div>
+
+        {/* Selected Item Preview */}
+        <div className="flex items-center gap-3.5 p-3 rounded-2xl bg-slate-50 border border-slate-200/80">
+          <img
+            src={
+              item?.image_url_snapshot ||
+              'https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=160&auto=format&fit=crop&q=80'
+            }
+            alt={item?.product_title_snapshot}
+            className="w-14 h-14 rounded-xl object-cover bg-white border border-slate-200 shrink-0"
+          />
+          <div className="flex-1 min-w-0 text-xs">
+            <p className="font-bold text-slate-900 truncate">
+              {item?.product_title_snapshot || 'Product Item'}
+            </p>
+            <p className="text-slate-500">
+              Purchased: {item?.variant_title_snapshot || 'Standard'} • Qty: {item?.quantity || 1}
+            </p>
+            <p className="font-extrabold text-slate-900 mt-0.5">
+              {formatNpr(item?.line_total_paisa || item?.unit_price_paisa)}
+            </p>
+          </div>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          {/* Action Type Toggle */}
+          <div>
+            <label className="block text-xs font-bold text-slate-700 mb-2">
+              Select Resolution Type *
+            </label>
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                type="button"
+                onClick={() => setRequestType('EXCHANGE')}
+                className={`p-3 rounded-2xl border text-left flex items-start gap-2.5 transition-all ${
+                  requestType === 'EXCHANGE'
+                    ? 'border-[#111827] bg-[#111827] text-white shadow-sm'
+                    : 'border-slate-200 bg-white hover:border-slate-300 text-slate-700'
+                }`}
+              >
+                <ArrowLeftRight className={`w-4 h-4 mt-0.5 ${requestType === 'EXCHANGE' ? 'text-rose-400' : 'text-slate-500'}`} />
+                <div>
+                  <p className="font-bold text-xs">Size Exchange</p>
+                  <p className={`text-[11px] mt-0.5 ${requestType === 'EXCHANGE' ? 'text-slate-300' : 'text-slate-500'}`}>
+                    Swap for different size / color
+                  </p>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setRequestType('RETURN')}
+                className={`p-3 rounded-2xl border text-left flex items-start gap-2.5 transition-all ${
+                  requestType === 'RETURN'
+                    ? 'border-[#111827] bg-[#111827] text-white shadow-sm'
+                    : 'border-slate-200 bg-white hover:border-slate-300 text-slate-700'
+                }`}
+              >
+                <RotateCcw className={`w-4 h-4 mt-0.5 ${requestType === 'RETURN' ? 'text-amber-400' : 'text-slate-500'}`} />
+                <div>
+                  <p className="font-bold text-xs">Return & Refund</p>
+                  <p className={`text-[11px] mt-0.5 ${requestType === 'RETURN' ? 'text-slate-300' : 'text-slate-500'}`}>
+                    Full refund to payment method
+                  </p>
+                </div>
+              </button>
+            </div>
+          </div>
+
+          {/* Replacement Variant Selector (for EXCHANGE) */}
+          {requestType === 'EXCHANGE' && (
+            <div className="space-y-2">
+              <label className="block text-xs font-bold text-slate-700">
+                Choose Replacement Size / Variant *
+              </label>
+              {loadingVariants ? (
+                <div className="h-10 bg-slate-100 rounded-xl animate-pulse" />
+              ) : availableVariants.length > 0 ? (
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                  {availableVariants.map((v) => (
+                    <button
+                      key={v.id}
+                      type="button"
+                      onClick={() => setReplacementVariantId(v.id)}
+                      className={`p-2.5 rounded-xl border text-left transition-all ${
+                        replacementVariantId === v.id
+                          ? 'border-rose-500 bg-rose-50/60 ring-2 ring-rose-500/20'
+                          : 'border-slate-200 hover:border-slate-300 bg-white'
+                      }`}
+                    >
+                      <p className="font-bold text-xs text-slate-900 truncate">
+                        {v.title || v.size_value || 'Variant'}
+                      </p>
+                      <p className="text-[11px] text-slate-500">
+                        {v.color_name ? `${v.color_name} • ` : ''}Stock: {v.available_qty ?? 'Available'}
+                      </p>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <select
+                  value={replacementVariantId}
+                  onChange={(e) => setReplacementVariantId(e.target.value)}
+                  className="w-full text-xs rounded-xl border border-slate-300 px-3 py-2.5 bg-slate-50 focus:bg-white"
+                >
+                  <option value="">Select Replacement Size (e.g. Size 40 / Size 42)</option>
+                  <option value={item?.variant_id || 'var-default'}>Standard Replacement Variant</option>
+                </select>
+              )}
+            </div>
+          )}
+
+          {/* Reason Selector */}
+          <div>
+            <label className="block text-xs font-bold text-slate-700 mb-1">
+              Reason for Request *
+            </label>
+            <select
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              className="w-full text-xs rounded-xl border border-slate-300 px-3 py-2.5 bg-slate-50 focus:bg-white"
+            >
+              <option value="Incorrect size / doesn't fit properly">
+                Incorrect size / doesn't fit properly
+              </option>
+              <option value="Defective / damaged piece">
+                Defective / damaged piece
+              </option>
+              <option value="Color or fabric mismatch from photo">
+                Color or fabric mismatch from photo
+              </option>
+              <option value="Received wrong item">
+                Received wrong item
+              </option>
+              <option value="Quality not as expected">
+                Quality not as expected
+              </option>
+            </select>
+          </div>
+
+          {/* Explanation Textarea (10-1000 chars) */}
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-xs font-bold text-slate-700">
+                Detailed Explanation * (10–1000 characters)
+              </label>
+              <span
+                className={`text-[11px] ${
+                  explanation.length < 10
+                    ? 'text-rose-500 font-semibold'
+                    : 'text-slate-400'
+                }`}
+              >
+                {explanation.length}/1000 chars {explanation.length < 10 ? '(min 10)' : ''}
+              </span>
+            </div>
+            <textarea
+              required
+              rows={3}
+              value={explanation}
+              onChange={(e) => setExplanation(e.target.value)}
+              placeholder="Please provide details (e.g. Waist too tight, need size 42 instead of 40, pickup from Adarshnagar near Ghantaghar)..."
+              className="w-full text-xs rounded-xl border border-slate-300 p-3 bg-slate-50 focus:bg-white focus:border-slate-500 resize-none"
+            />
+            {explanation.length > 0 && explanation.length < 10 && (
+              <p className="text-[11px] text-rose-500 mt-1">
+                Please enter at least 10 characters so our vendor can prepare the right replacement.
+              </p>
+            )}
+          </div>
+
+          {/* Pickup Address in Birgunj */}
+          <div>
+            <label className="block text-xs font-bold text-slate-700 mb-1">
+              Birgunj Doorstep Pickup Address *
+            </label>
+            <input
+              required
+              type="text"
+              value={pickupAddress}
+              onChange={(e) => setPickupAddress(e.target.value)}
+              placeholder="e.g. Ward 10, Main Road, Adarshnagar, Birgunj"
+              className="w-full text-xs rounded-xl border border-slate-300 px-3 py-2 bg-slate-50 focus:bg-white"
+            />
+          </div>
+
+          {/* Submit Actions */}
+          <div className="flex items-center justify-end gap-3 pt-2 border-t border-slate-100">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={isSubmitting || explanation.trim().length < 10}
+              className="px-5 py-2.5 rounded-xl bg-slate-900 hover:bg-[#E11D48] text-white text-xs font-bold disabled:opacity-40 transition-colors shadow-sm flex items-center gap-2"
+            >
+              {isSubmitting ? 'Submitting...' : requestType === 'EXCHANGE' ? 'Submit 36-Hr Exchange' : 'Submit Return Request'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+};
+
+// ============================================================================
 // SCREEN #8: ORDER HISTORY PAGE
 // ============================================================================
 export const OrderHistoryPage: React.FC = () => {
@@ -941,6 +1453,10 @@ export const OrderHistoryPage: React.FC = () => {
   const [orders, setOrders] = useState<any[]>([]);
   const [filter, setFilter] = useState('ALL');
   const [loading, setLoading] = useState(true);
+  const [selectedReturnItem, setSelectedReturnItem] = useState<{
+    order: any;
+    item: any;
+  } | null>(null);
 
   const loadOrders = () => {
     setLoading(true);
@@ -956,22 +1472,6 @@ export const OrderHistoryPage: React.FC = () => {
   const filtered = orders.filter((o) =>
     filter === 'ALL' ? true : o.status === filter,
   );
-
-  const handleRequestExchange = async (orderItemId: string) => {
-    try {
-      await apiFetch('/customer/returns', {
-        method: 'POST',
-        body: {
-          orderItemId,
-          requestType: 'EXCHANGE',
-          reason: '36-Hour Easy Size Exchange requested from Order History',
-        },
-      });
-      showToast('36-Hour Easy Exchange request submitted!', 'success');
-    } catch (err: any) {
-      showToast(err.message, 'error');
-    }
-  };
 
   return (
     <div className="min-h-screen flex flex-col bg-[#F8FAFC]">
@@ -1016,68 +1516,119 @@ export const OrderHistoryPage: React.FC = () => {
             filtered.map((order) => (
               <div
                 key={order.id}
-                className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-sm flex flex-wrap items-center justify-between gap-4"
+                className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-sm space-y-4"
               >
-                <div className="flex items-center gap-4">
-                  <div className="flex -space-x-2">
-                    {(order.items || []).slice(0, 2).map((it: any) => (
-                      <img
-                        key={it.id}
-                        src={
-                          it.image_url_snapshot ||
-                          'https://images.unsplash.com/photo-1549298916-b41d501d3772?w=200&auto=format&fit=crop&q=80'
-                        }
-                        alt={it.product_title_snapshot}
-                        className="w-14 h-14 rounded-xl object-cover border-2 border-white bg-slate-100"
-                      />
-                    ))}
+                <div className="flex flex-wrap items-center justify-between gap-4">
+                  <div className="flex items-center gap-4">
+                    <div className="flex -space-x-2">
+                      {(order.items || []).slice(0, 2).map((it: any) => (
+                        <img
+                          key={it.id}
+                          src={
+                            it.image_url_snapshot ||
+                            'https://images.unsplash.com/photo-1549298916-b41d501d3772?w=200&auto=format&fit=crop&q=80'
+                          }
+                          alt={it.product_title_snapshot}
+                          className="w-14 h-14 rounded-xl object-cover border-2 border-white bg-slate-100"
+                        />
+                      ))}
+                    </div>
+                    <div>
+                      <p className="font-bold text-sm text-slate-900">
+                        Order {order.order_number}
+                      </p>
+                      <p className="text-xs text-slate-500">
+                        {formatShortDate(order.created_at)}
+                      </p>
+                    </div>
                   </div>
+
                   <div>
-                    <p className="font-bold text-sm text-slate-900">
-                      Order {order.order_number}
+                    <p className="font-extrabold text-sm text-slate-900">
+                      {formatNpr(order.total_paisa)}
                     </p>
                     <p className="text-xs text-slate-500">
-                      {formatShortDate(order.created_at)}
+                      {(order.items || []).length || 1} Item
+                      {(order.items || []).length === 1 ? '' : 's'} • {order.payment_method}
                     </p>
+                  </div>
+
+                  <div className="flex items-center gap-3">
+                    <StatusBadge status={order.status} />
+
+                    <Link
+                      to={`/orders/${order.id}/track`}
+                      className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700"
+                      title="Track Order"
+                    >
+                      <ChevronRight className="w-4 h-4" />
+                    </Link>
                   </div>
                 </div>
 
-                <div>
-                  <p className="font-extrabold text-sm text-slate-900">
-                    {formatNpr(order.total_paisa)}
-                  </p>
-                  <p className="text-xs text-slate-500">
-                    {(order.items || []).length || 1} Item
-                    {(order.items || []).length === 1 ? '' : 's'} • {order.payment_method}
-                  </p>
-                </div>
+                {/* Individual order items with 36-Hr Exchange button */}
+                {order.items && order.items.length > 0 && (
+                  <div className="border-t border-slate-100 pt-3 space-y-2">
+                    {order.items.map((item: any) => (
+                      <div
+                        key={item.id}
+                        className="flex items-center justify-between gap-3 text-xs p-2 rounded-xl bg-slate-50/70"
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <img
+                            src={
+                              item.image_url_snapshot ||
+                              'https://images.unsplash.com/photo-1549298916-b41d501d3772?w=100&auto=format&fit=crop&q=80'
+                            }
+                            alt={item.product_title_snapshot}
+                            className="w-8 h-8 rounded-lg object-cover bg-white shrink-0"
+                          />
+                          <div className="truncate">
+                            <span className="font-semibold text-slate-800">
+                              {item.product_title_snapshot}
+                            </span>{' '}
+                            <span className="text-slate-400">
+                              ({item.variant_title_snapshot || 'Standard'}) × {item.quantity}
+                            </span>
+                          </div>
+                        </div>
 
-                <div className="flex items-center gap-3">
-                  <StatusBadge status={order.status} />
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className="font-bold text-slate-800">
+                            {formatNpr(item.line_total_paisa)}
+                          </span>
 
-                  {order.status === 'DELIVERED' && order.items?.[0] && (
-                    <button
-                      type="button"
-                      onClick={() => handleRequestExchange(order.items[0].id)}
-                      className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                    >
-                      36-Hr Exchange
-                    </button>
-                  )}
-
-                  <Link
-                    to={`/orders/${order.id}/track`}
-                    className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700"
-                    title="Track Order"
-                  >
-                    <ChevronRight className="w-4 h-4" />
-                  </Link>
-                </div>
+                          {order.status === 'DELIVERED' && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setSelectedReturnItem({ order, item })
+                              }
+                              className="px-2.5 py-1 rounded-lg border border-rose-200 bg-white hover:bg-rose-50 text-[11px] font-bold text-rose-700 flex items-center gap-1 shadow-2xs"
+                            >
+                              <RotateCcw className="w-3 h-3" />
+                              36-Hr Exchange / Return
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             ))
           )}
         </div>
       </main>
+
+      {selectedReturnItem && (
+        <ReturnExchangeModal
+          order={selectedReturnItem.order}
+          item={selectedReturnItem.item}
+          onClose={() => setSelectedReturnItem(null)}
+          onSuccess={() => loadOrders()}
+        />
+      )}
 
       <StorefrontFooter />
     </div>
@@ -1285,6 +1836,32 @@ export const OrderTrackingPage: React.FC = () => {
                 })}
               </div>
             </div>
+
+            {/* If Delivered, 36-Hr Return / Exchange Callout */}
+            {order.status === 'DELIVERED' && (
+              <div className="p-4 rounded-2xl bg-gradient-to-r from-rose-50 to-amber-50 border border-rose-100 flex flex-wrap items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-rose-500/10 text-[#E11D48] flex items-center justify-center font-bold">
+                    <RotateCcw className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <p className="font-bold text-sm text-slate-900">
+                      36-Hour Easy Doorstep Exchange Active
+                    </p>
+                    <p className="text-xs text-slate-600">
+                      Not the right size or fit? Request a free doorstep exchange with Rajesh Kumar within 36 hours.
+                    </p>
+                  </div>
+                </div>
+
+                <Link
+                  to="/orders"
+                  className="px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-[#E11D48] text-white text-xs font-bold transition-colors shadow-sm"
+                >
+                  Manage Returns / Exchanges
+                </Link>
+              </div>
+            )}
           </div>
         )}
       </main>

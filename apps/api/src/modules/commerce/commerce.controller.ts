@@ -76,7 +76,11 @@ const CreateReturnSchema = z
   .object({
     orderItemId: z.string().min(1),
     requestType: z.enum(['RETURN', 'EXCHANGE']),
-    reason: z.string().min(5).max(800),
+    reason: z.string().min(3).max(800),
+    explanation: z.string().min(10).max(1000).optional(),
+    replacementVariantId: z.string().optional(),
+    evidenceUrls: z.array(z.string().url()).max(5).optional(),
+    pickupAddressText: z.string().max(300).optional(),
   })
   .strict();
 
@@ -900,11 +904,19 @@ export class CommerceController {
 
   @Get('customer/orders/:id')
   async getCustomerOrderDetail(@Param('id') id: string, @Req() req: any) {
-    const auth: AuthContext = req.auth;
+    return this.fetchCustomerOrder(id, req.auth.userId);
+  }
+
+  @Get('orders/:id')
+  async getOrder(@Param('id') id: string, @Req() req: any) {
+    return this.fetchCustomerOrder(id, req.auth.userId);
+  }
+
+  private async fetchCustomerOrder(id: string, customerId: string) {
     // STRICT CUSTOMER ISOLATION (Journey #12)
     const orderRes = await this.db.query(
       `SELECT * FROM orders WHERE (id = $1 OR order_number = $1) AND customer_id = $2`,
-      [id, auth.userId],
+      [id, customerId],
     );
 
     if (orderRes.rows.length === 0) {
@@ -1068,6 +1080,35 @@ export class CommerceController {
       );
     }
 
+    const dupCheck = await this.db.query(
+      `SELECT id, status FROM return_requests WHERE order_item_id = $1 AND status NOT IN ('REJECTED', 'CANCELLED')`,
+      [dto.orderItemId],
+    );
+    if (dupCheck.rows.length > 0) {
+      throw new AppDomainError(
+        'RETURN_ALREADY_REQUESTED',
+        'A return or exchange request is already active for this order item.',
+        HttpStatus.CONFLICT,
+      );
+    }
+
+    if (dto.requestType === 'EXCHANGE' && dto.replacementVariantId) {
+      const replRes = await this.db.query<{ id: string; available_qty: number; reserved_qty: number }>(
+        `SELECT pv.id, ii.available_qty, ii.reserved_qty
+         FROM product_variants pv
+         JOIN inventory_items ii ON ii.variant_id = pv.id
+         WHERE pv.id = $1`,
+        [dto.replacementVariantId],
+      );
+      if (replRes.rows.length === 0 || (replRes.rows[0].available_qty - replRes.rows[0].reserved_qty) < 1) {
+        throw new AppDomainError(
+          'REPLACEMENT_OUT_OF_STOCK',
+          'The selected replacement size/variant is currently out of stock.',
+          HttpStatus.CONFLICT,
+        );
+      }
+    }
+
     const returnId = `ret-${crypto.randomUUID()}`;
     const refundAmountPaisa = Number(row.line_total_paisa);
 
@@ -1075,8 +1116,9 @@ export class CommerceController {
       await tx.query(
         `INSERT INTO return_requests (
           id, order_id, vendor_order_id, order_item_id, customer_id, vendor_id,
-          request_type, reason, status, refund_amount_paisa
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'REQUESTED',$9)`,
+          request_type, reason, status, refund_amount_paisa,
+          replacement_variant_id, customer_explanation, evidence_urls_json, pickup_address_text
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'REQUESTED',$9,$10,$11,$12,$13)`,
         [
           returnId,
           row.order_id,
@@ -1087,6 +1129,10 @@ export class CommerceController {
           dto.requestType,
           sanitizeText(dto.reason),
           refundAmountPaisa,
+          dto.replacementVariantId ?? null,
+          dto.explanation ? sanitizeText(dto.explanation) : '',
+          JSON.stringify(dto.evidenceUrls ?? []),
+          dto.pickupAddressText ? sanitizeText(dto.pickupAddressText) : '',
         ],
       );
 
@@ -1099,7 +1145,7 @@ export class CommerceController {
           targetType: 'RETURN_REQUEST',
           targetId: returnId,
           reason: sanitizeText(dto.reason),
-          metadata: { refundAmountPaisa, requestType: dto.requestType },
+          metadata: { refundAmountPaisa, requestType: dto.requestType, replacementVariantId: dto.replacementVariantId },
         },
         tx,
       );
@@ -1112,8 +1158,67 @@ export class CommerceController {
         requestType: dto.requestType,
         refundAmountPaisa,
         status: 'REQUESTED',
+        replacementVariantId: dto.replacementVariantId,
       },
     };
+  }
+
+  @Get('customer/returns')
+  async listCustomerReturns(@Req() req: any) {
+    const auth: AuthContext = req.auth;
+    const res = await this.db.query(
+      `SELECT
+         rr.*,
+         o.order_number,
+         oi.product_title_snapshot,
+         oi.variant_title_snapshot,
+         oi.sku_snapshot,
+         oi.image_url_snapshot,
+         oi.unit_price_paisa,
+         oi.quantity,
+         oi.line_total_paisa,
+         v.business_name AS vendor_name,
+         pv.title AS replacement_variant_title
+       FROM return_requests rr
+       JOIN orders o ON o.id = rr.order_id
+       JOIN order_items oi ON oi.id = rr.order_item_id
+       JOIN vendors v ON v.id = rr.vendor_id
+       LEFT JOIN product_variants pv ON pv.id = rr.replacement_variant_id
+       WHERE rr.customer_id = $1
+       ORDER BY rr.requested_at DESC`,
+      [auth.userId],
+    );
+    return { items: res.rows };
+  }
+
+  @Get('customer/returns/:id')
+  async getCustomerReturn(@Param('id') id: string, @Req() req: any) {
+    const auth: AuthContext = req.auth;
+    const res = await this.db.query(
+      `SELECT
+         rr.*,
+         o.order_number,
+         oi.product_title_snapshot,
+         oi.variant_title_snapshot,
+         oi.sku_snapshot,
+         oi.image_url_snapshot,
+         oi.unit_price_paisa,
+         oi.quantity,
+         oi.line_total_paisa,
+         v.business_name AS vendor_name,
+         pv.title AS replacement_variant_title
+       FROM return_requests rr
+       JOIN orders o ON o.id = rr.order_id
+       JOIN order_items oi ON oi.id = rr.order_item_id
+       JOIN vendors v ON v.id = rr.vendor_id
+       LEFT JOIN product_variants pv ON pv.id = rr.replacement_variant_id
+       WHERE rr.id = $1 AND rr.customer_id = $2`,
+      [id, auth.userId],
+    );
+    if (res.rows.length === 0) {
+      throw new AppDomainError('RETURN_NOT_FOUND', 'Return request not found.', HttpStatus.NOT_FOUND);
+    }
+    return { returnRequest: res.rows[0] };
   }
 
   @Post('customer/reviews')

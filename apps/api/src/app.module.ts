@@ -10,6 +10,9 @@ import { CatalogController } from './modules/catalog/catalog.controller.js';
 import { CommerceController } from './modules/commerce/commerce.controller.js';
 import { VendorController } from './modules/vendor/vendor.controller.js';
 import { AdminController } from './modules/admin/admin.controller.js';
+import { SupportController } from './modules/support/support.controller.js';
+import { CloudinaryMediaService } from './modules/media/cloudinary-media.service.js';
+import { GeminiSupportService } from './modules/support/gemini-support.service.js';
 
 @Module({
   controllers: [
@@ -19,10 +22,13 @@ import { AdminController } from './modules/admin/admin.controller.js';
     CommerceController,
     VendorController,
     AdminController,
+    SupportController,
   ],
   providers: [
     DatabaseService,
     AuditService,
+    CloudinaryMediaService,
+    GeminiSupportService,
     {
       provide: APP_GUARD,
       useClass: AuthGuard,
@@ -32,6 +38,6 @@ import { AdminController } from './modules/admin/admin.controller.js';
       useClass: GlobalApiErrorFilter,
     },
   ],
-  exports: [DatabaseService, AuditService],
+  exports: [DatabaseService, AuditService, CloudinaryMediaService, GeminiSupportService],
 })
 export class AppModule {}

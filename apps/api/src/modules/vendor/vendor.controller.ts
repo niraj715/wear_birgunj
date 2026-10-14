@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   HttpStatus,
@@ -22,6 +23,7 @@ import {
   RequireVendor,
 } from '../../common/auth.guard.js';
 import { sanitizeText } from '../../common/crypto.util.js';
+import { CloudinaryMediaService } from '../media/cloudinary-media.service.js';
 
 const VendorApplySchema = z
   .object({
@@ -110,6 +112,7 @@ export class VendorController {
   constructor(
     @Inject(DatabaseService) private readonly db: DatabaseService,
     @Inject(AuditService) private readonly audit: AuditService,
+    @Inject(CloudinaryMediaService) private readonly cloudinaryMedia: CloudinaryMediaService,
   ) {}
 
   @Post('apply')
@@ -351,6 +354,19 @@ export class VendorController {
   async createVendorProduct(@Body() body: unknown, @Req() req: any) {
     const auth: AuthContext = req.auth;
     const vendorId = auth.vendorId!;
+
+    const vendorCheck = await this.db.query<{ approval_status: string }>(
+      'SELECT approval_status FROM vendors WHERE id = $1',
+      [vendorId],
+    );
+    if (!vendorCheck.rows[0] || vendorCheck.rows[0].approval_status !== 'APPROVED') {
+      throw new AppDomainError(
+        'VENDOR_NOT_APPROVED',
+        'Your vendor account is pending verification. Only approved vendors can create or publish products.',
+        HttpStatus.FORBIDDEN,
+      );
+    }
+
     const dto = CreateProductSchema.parse(body);
 
     const dupSlug = await this.db.query('SELECT id FROM products WHERE slug = $1', [dto.slug]);
@@ -905,5 +921,368 @@ export class VendorController {
     });
 
     return { updated: true, payoutMethod: dto.payoutMethod };
+  }
+
+  @RequireVendor()
+  @Post('products/:id/images/upload')
+  async uploadProductImage(
+    @Param('id') productId: string,
+    @Body() body: any,
+    @Req() req: any,
+  ) {
+    const auth: AuthContext = req.auth;
+    const vendorId = auth.vendorId!;
+
+    const vendorCheck = await this.db.query<{ approval_status: string }>(
+      'SELECT approval_status FROM vendors WHERE id = $1',
+      [vendorId],
+    );
+    if (!vendorCheck.rows[0] || vendorCheck.rows[0].approval_status !== 'APPROVED') {
+      throw new AppDomainError(
+        'VENDOR_NOT_APPROVED',
+        'Only approved vendors can upload product media.',
+        HttpStatus.FORBIDDEN,
+      );
+    }
+
+    const prodRes = await this.db.query('SELECT id, title FROM products WHERE id = $1 AND vendor_id = $2', [
+      productId,
+      vendorId,
+    ]);
+    if (prodRes.rows.length === 0) {
+      throw new AppDomainError('PRODUCT_NOT_FOUND', 'Product not found within your store.', HttpStatus.NOT_FOUND);
+    }
+
+    const { imageBase64, mimeType, altText, isPrimary } = body;
+    if (!imageBase64 || typeof imageBase64 !== 'string') {
+      throw new AppDomainError('INVALID_IMAGE', 'Base64 image data is required in imageBase64.', HttpStatus.BAD_REQUEST);
+    }
+
+    const cleanBase64 = imageBase64.replace(/^data:image\/[a-zA-Z+]+;base64,/, '');
+    const buffer = Buffer.from(cleanBase64, 'base64');
+
+    const uploadRes = await this.cloudinaryMedia.uploadProductImage(buffer, {
+      vendorId,
+      productId,
+      declaredMimeType: mimeType,
+    });
+
+    const mediaId = `media-${crypto.randomUUID()}`;
+    const alt = altText ? sanitizeText(altText) : prodRes.rows[0].title;
+
+    await this.db.transaction(async (tx) => {
+      if (isPrimary) {
+        await tx.query('UPDATE product_media SET is_primary = FALSE WHERE product_id = $1', [productId]);
+      }
+      await tx.query(
+        `INSERT INTO product_media (
+          id, product_id, url, object_key, alt_text, sort_order, is_primary, width, height, format
+        ) VALUES ($1, $2, $3, $4, $5, 0, $6, $7, $8, $9)`,
+        [
+          mediaId,
+          productId,
+          uploadRes.url,
+          uploadRes.publicId,
+          alt,
+          Boolean(isPrimary),
+          uploadRes.width || 800,
+          uploadRes.height || 800,
+          uploadRes.format,
+        ],
+      );
+    });
+
+    const created = await this.db.query('SELECT * FROM product_media WHERE id = $1', [mediaId]);
+    return {
+      image: created.rows[0],
+      isMock: uploadRes.isMock,
+    };
+  }
+
+  @RequireVendor()
+  @Delete('products/:id/images/:imageId')
+  async deleteProductImage(
+    @Param('id') productId: string,
+    @Param('imageId') imageId: string,
+    @Req() req: any,
+  ) {
+    const auth: AuthContext = req.auth;
+    const vendorId = auth.vendorId!;
+
+    const prodRes = await this.db.query('SELECT id FROM products WHERE id = $1 AND vendor_id = $2', [
+      productId,
+      vendorId,
+    ]);
+    if (prodRes.rows.length === 0) {
+      throw new AppDomainError('PRODUCT_NOT_FOUND', 'Product not found within your store.', HttpStatus.NOT_FOUND);
+    }
+
+    const imgRes = await this.db.query<{ id: string; object_key: string }>(
+      'SELECT id, object_key FROM product_media WHERE id = $1 AND product_id = $2',
+      [imageId, productId],
+    );
+    if (imgRes.rows.length === 0) {
+      throw new AppDomainError('IMAGE_NOT_FOUND', 'Image not found for this product.', HttpStatus.NOT_FOUND);
+    }
+
+    await this.cloudinaryMedia.deleteProductImage(imgRes.rows[0].object_key);
+    await this.db.query('DELETE FROM product_media WHERE id = $1', [imageId]);
+
+    return { deleted: true };
+  }
+
+  @RequireVendor()
+  @Patch('products/:id/images/reorder')
+  async reorderProductImages(
+    @Param('id') productId: string,
+    @Body() body: any,
+    @Req() req: any,
+  ) {
+    const auth: AuthContext = req.auth;
+    const vendorId = auth.vendorId!;
+
+    const prodRes = await this.db.query('SELECT id FROM products WHERE id = $1 AND vendor_id = $2', [
+      productId,
+      vendorId,
+    ]);
+    if (prodRes.rows.length === 0) {
+      throw new AppDomainError('PRODUCT_NOT_FOUND', 'Product not found within your store.', HttpStatus.NOT_FOUND);
+    }
+
+    const { imageIds, primaryImageId } = body;
+    if (!Array.isArray(imageIds)) {
+      throw new AppDomainError('INVALID_INPUT', 'imageIds array is required.', HttpStatus.BAD_REQUEST);
+    }
+
+    await this.db.transaction(async (tx) => {
+      for (let i = 0; i < imageIds.length; i++) {
+        await tx.query(
+          `UPDATE product_media
+           SET sort_order = $1, is_primary = $2
+           WHERE id = $3 AND product_id = $4`,
+          [i, imageIds[i] === primaryImageId, imageIds[i], productId],
+        );
+      }
+    });
+
+    const updated = await this.db.query(
+      'SELECT * FROM product_media WHERE product_id = $1 ORDER BY sort_order ASC',
+      [productId],
+    );
+    return { images: updated.rows };
+  }
+
+  @RequireVendor()
+  @Get('returns')
+  async listVendorReturns(@Req() req: any) {
+    const auth: AuthContext = req.auth;
+    const vendorId = auth.vendorId!;
+
+    const res = await this.db.query(
+      `SELECT
+         rr.*,
+         o.order_number,
+         oi.product_title_snapshot,
+         oi.variant_title_snapshot,
+         oi.sku_snapshot,
+         oi.image_url_snapshot,
+         oi.unit_price_paisa,
+         oi.quantity,
+         oi.line_total_paisa,
+         u.full_name AS customer_name,
+         u.phone AS customer_phone,
+         pv.title AS replacement_variant_title,
+         pv.sku AS replacement_sku
+       FROM return_requests rr
+       JOIN orders o ON o.id = rr.order_id
+       JOIN order_items oi ON oi.id = rr.order_item_id
+       JOIN users u ON u.id = rr.customer_id
+       LEFT JOIN product_variants pv ON pv.id = rr.replacement_variant_id
+       WHERE rr.vendor_id = $1
+       ORDER BY rr.requested_at DESC`,
+      [vendorId],
+    );
+
+    return { items: res.rows };
+  }
+
+  @RequireVendor()
+  @Get('returns/:id')
+  async getVendorReturnDetail(@Param('id') id: string, @Req() req: any) {
+    const auth: AuthContext = req.auth;
+    const vendorId = auth.vendorId!;
+
+    const res = await this.db.query(
+      `SELECT
+         rr.*,
+         o.order_number,
+         oi.product_title_snapshot,
+         oi.variant_title_snapshot,
+         oi.sku_snapshot,
+         oi.image_url_snapshot,
+         oi.unit_price_paisa,
+         oi.quantity,
+         oi.line_total_paisa,
+         u.full_name AS customer_name,
+         u.phone AS customer_phone,
+         pv.title AS replacement_variant_title,
+         pv.sku AS replacement_sku
+       FROM return_requests rr
+       JOIN orders o ON o.id = rr.order_id
+       JOIN order_items oi ON oi.id = rr.order_item_id
+       JOIN users u ON u.id = rr.customer_id
+       LEFT JOIN product_variants pv ON pv.id = rr.replacement_variant_id
+       WHERE rr.id = $1 AND rr.vendor_id = $2`,
+      [id, vendorId],
+    );
+
+    if (res.rows.length === 0) {
+      throw new AppDomainError(
+        'RETURN_REQUEST_NOT_FOUND',
+        'Return request not found within your vendor store.',
+        HttpStatus.NOT_FOUND,
+      );
+    }
+
+    return { returnRequest: res.rows[0] };
+  }
+
+  @RequireVendor()
+  @Post('returns/:id/review')
+  @HttpCode(HttpStatus.OK)
+  async reviewVendorReturn(
+    @Param('id') id: string,
+    @Body() body: any,
+    @Req() req: any,
+  ) {
+    const auth: AuthContext = req.auth;
+    const vendorId = auth.vendorId!;
+
+    const dto = z
+      .object({
+        action: z.enum(['APPROVE', 'REJECT']),
+        rejectionReason: z.string().min(5).max(500).optional(),
+        resolutionNotes: z.string().max(500).optional(),
+      })
+      .strict()
+      .parse(body);
+
+    if (dto.action === 'REJECT' && !dto.rejectionReason) {
+      throw new AppDomainError(
+        'REJECTION_REASON_REQUIRED',
+        'A clear reason must be provided when rejecting a return or exchange request.',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    return this.db.transaction(async (tx) => {
+      const rrRes = await tx.query<{
+        id: string;
+        request_type: string;
+        replacement_variant_id: string | null;
+        status: string;
+        order_id: string;
+      }>(
+        'SELECT * FROM return_requests WHERE id = $1 AND vendor_id = $2',
+        [id, vendorId],
+      );
+
+      if (rrRes.rows.length === 0) {
+        throw new AppDomainError(
+          'RETURN_REQUEST_NOT_FOUND',
+          'Return request not found within your store.',
+          HttpStatus.NOT_FOUND,
+        );
+      }
+
+      const rr = rrRes.rows[0];
+      if (rr.status !== 'REQUESTED' && rr.status !== 'UNDER_REVIEW') {
+        throw new AppDomainError(
+          'INVALID_STATE_TRANSITION',
+          `Cannot review return request in '${rr.status}' status.`,
+          HttpStatus.BAD_REQUEST,
+        );
+      }
+
+      if (dto.action === 'REJECT') {
+        await tx.query(
+          `UPDATE return_requests
+           SET status = 'REJECTED',
+               rejection_reason = $1,
+               resolution_notes = $2,
+               resolved_at = NOW()
+           WHERE id = $3 AND vendor_id = $4`,
+          [sanitizeText(dto.rejectionReason!), dto.resolutionNotes ? sanitizeText(dto.resolutionNotes) : null, id, vendorId],
+        );
+
+        await this.audit.log(
+          {
+            actorId: auth.userId,
+            actorRole: auth.vendorRole || 'VENDOR_OWNER',
+            vendorId,
+            action: 'RETURN_REJECTED',
+            targetType: 'RETURN_REQUEST',
+            targetId: id,
+            reason: sanitizeText(dto.rejectionReason!),
+          },
+          tx,
+        );
+      } else {
+        if (rr.request_type === 'EXCHANGE' && rr.replacement_variant_id) {
+          const invRes = await tx.query<{
+            id: string;
+            available_qty: number;
+            reserved_qty: number;
+          }>(
+            `SELECT id, available_qty, reserved_qty
+             FROM inventory_items
+             WHERE variant_id = $1
+             FOR UPDATE`,
+            [rr.replacement_variant_id],
+          );
+
+          if (invRes.rows.length === 0 || (invRes.rows[0].available_qty - invRes.rows[0].reserved_qty) < 1) {
+            throw new AppDomainError(
+              'REPLACEMENT_OUT_OF_STOCK',
+              'The requested replacement variant is currently out of stock. Please offer an alternative or refund.',
+              HttpStatus.CONFLICT,
+            );
+          }
+
+          await tx.query(
+            'UPDATE inventory_items SET reserved_qty = reserved_qty + 1, updated_at = NOW() WHERE id = $1',
+            [invRes.rows[0].id],
+          );
+        }
+
+        const newStatus = rr.request_type === 'EXCHANGE' ? 'PICKUP_OR_SHIPMENT_PENDING' : 'APPROVED';
+
+        await tx.query(
+          `UPDATE return_requests
+           SET status = $1,
+               resolution_notes = $2,
+               resolved_at = NOW()
+           WHERE id = $3 AND vendor_id = $4`,
+          [newStatus, dto.resolutionNotes ? sanitizeText(dto.resolutionNotes) : 'Approved by vendor', id, vendorId],
+        );
+
+        await this.audit.log(
+          {
+            actorId: auth.userId,
+            actorRole: auth.vendorRole || 'VENDOR_OWNER',
+            vendorId,
+            action: 'RETURN_APPROVED',
+            targetType: 'RETURN_REQUEST',
+            targetId: id,
+            reason: 'Approved by vendor',
+            metadata: { newStatus, requestType: rr.request_type },
+          },
+          tx,
+        );
+      }
+
+      const updated = await tx.query('SELECT * FROM return_requests WHERE id = $1', [id]);
+      return { returnRequest: updated.rows[0] };
+    });
   }
 }

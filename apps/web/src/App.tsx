@@ -19,6 +19,7 @@ import {
 } from './pages/CustomerFlowPages';
 import { VendorPortalPage, AdminPortalPage } from './pages/PortalPages';
 import { StorefrontHeader, StorefrontFooter } from './components/DesignSystem';
+import { CustomerSupportChatbot } from './components/CustomerSupportChatbot';
 
 const NotFoundPage: React.FC = () => (
   <div className="min-h-screen flex flex-col bg-[#F8FAFC]">
@@ -67,6 +68,7 @@ export const App: React.FC = () => {
           <Route path="/admin" element={<AdminPortalPage />} />
           <Route path="*" element={<NotFoundPage />} />
         </Routes>
+        <CustomerSupportChatbot />
       </AuthProvider>
     </BrowserRouter>
   );
